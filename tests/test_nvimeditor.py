@@ -120,6 +120,41 @@ def test_document_change_to_different_path_recreates_nvim(qtbot, mock_nvim_widge
     first.shutdown.assert_called_once()
 
 
+def test_document_loaded_signal_resyncs_when_it_matches_current_document(qtbot, mock_nvim_widget):
+    # Regression test for a real bug: MainWindow.readSettings() restores
+    # dock visibility (forcing this widget into existence via Qt's
+    # sizeHint()/showEvent machinery) *before* a session restore has
+    # reopened any document, so mainwindow.currentDocument() is still None
+    # at construction time and the widget starts out on the placeholder --
+    # then never hears about the document that becomes current moments
+    # later, because currentDocumentChanged doesn't fire again for a
+    # document that's already settled as "the" current one by the time
+    # this widget existed to listen. app.documentLoaded is the fix: it
+    # fires whenever any document finishes loading, independent of this
+    # widget's construction timing.
+    widget, _panel, mainwindow = make_widget(qtbot, document=None)
+    assert widget._stack.currentWidget() is widget._placeholder
+
+    doc = FakeDocument("hello", "/tmp/a.ly")
+    mainwindow.currentDocument.return_value = doc  # now current, as Frescobaldi would set it
+    widget._documentLoaded(doc)  # what app.documentLoaded firing for it looks like
+
+    assert widget._current_path == "/tmp/a.ly"
+    assert isinstance(widget._nvim_widget, FakeNvimWidget)
+
+
+def test_document_loaded_signal_ignored_when_not_current_document(qtbot, mock_nvim_widget):
+    widget, _panel, _mainwindow = make_widget(qtbot, document=None)
+
+    other_doc = FakeDocument("other", "/tmp/other.ly")
+    # mainwindow.currentDocument() still returns None here -- this loaded
+    # document isn't the current one (e.g. a background tab restoring).
+    widget._documentLoaded(other_doc)
+
+    assert widget._current_path is None
+    mock_nvim_widget.assert_not_called()
+
+
 # -- save -> reload, with the reload guard -----------------------------------
 
 

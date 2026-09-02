@@ -65,6 +65,7 @@ placeholder is shown instead of pretending to edit it.
 """
 
 
+import app
 import panelmanager
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
@@ -94,10 +95,25 @@ class NvimEditorWidget(QWidget):
         mainwindow = panel.mainwindow()
         mainwindow.currentDocumentChanged.connect(self._documentChanged)
         mainwindow.currentViewChanged.connect(self._viewChanged)
+        # A dock widget's own widget() can be force-created (by Qt's
+        # sizeHint()/dock-state restore, or by explicitly toggling it
+        # visible) before this mainwindow has any current document yet --
+        # e.g. a session restore reopening documents happens *after*
+        # MainWindow.readSettings() replays which docks were visible last
+        # time. currentDocumentChanged won't fire again once a document
+        # settles as "the" current one before we existed to hear it, so
+        # also listen for the app-wide signal that fires whenever any
+        # document finishes loading (covers session restore and File ->
+        # Open alike) and recheck then.
+        app.documentLoaded.connect(self._documentLoaded)
         self._documentChanged(mainwindow.currentDocument())
         view = mainwindow.currentView()
         if view:
             self._viewChanged(view)
+
+    def _documentLoaded(self, doc):
+        if doc is self._panel.mainwindow().currentDocument():
+            self._documentChanged(doc)
 
     def _documentChanged(self, doc, old=None):
         path = doc.url().toLocalFile() if doc else ""
