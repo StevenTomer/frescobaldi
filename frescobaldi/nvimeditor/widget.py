@@ -20,19 +20,47 @@
 """
 The actual widget shown in the Neovim Editor panel.
 
-v1 scope, deliberately: opens a real embedded Neovim (qtnvim.NvimWidget)
-on the current document's file, switches to a fresh Neovim instance when
-the active document tab changes, and reloads the Frescobaldi document
-(keeping undo history) whenever Neovim saves it. Not yet done: PDF
-point-and-click <-> Neovim cursor sync in either direction, and
-suppressing the generic externalchanges "reload?" bar this save also
-triggers (harmless double-handling for now, not a correctness bug).
+v1 scope: opens a real embedded Neovim (qtnvim.NvimWidget) on the current
+document's file, switches to a fresh Neovim instance when the active
+document tab changes, reloads the Frescobaldi document (keeping undo
+history) whenever Neovim saves it, and syncs the text cursor with the
+Music View (PDF) in both directions:
+
+- Frescobaldi's current View moving its cursor -- whether from typing,
+  clicking in the View, or a PDF point-and-click (which itself moves the
+  View's cursor; see musicview/widget.py's slotLinkClicked) -- moves
+  Neovim's cursor to match, via NvimWidget.set_cursor(). No separate
+  hook into the PDF click handler was needed for this.
+- Neovim's cursor moving (any motion, not just clicks) highlights the
+  corresponding region in the Music View, by building a synthetic
+  QTextCursor on Frescobaldi's real document and passing it to
+  MusicView.showCurrentLinks(cursor=...) -- the same method Frescobaldi's
+  own View uses for this, just fed a cursor position it didn't compute
+  itself. Only touches an already-open Music View (never forces the
+  panel to load) and respects the existing "sync cursor" toggle
+  (Actions.music_sync_cursor) so this doesn't behave differently from
+  Frescobaldi's native cursor-follows-PDF behavior.
+
+Both directions of cursor sync were verified against a real running
+Frescobaldi with a compiled score: clicking a note in the PDF moved
+Neovim's cursor to the exact source position (confirmed via Neovim's own
+statusline), and moving Neovim's cursor onto a note's source position
+(mind the LilyPond source's leading whitespace -- column 0 is blank, not
+the note) produced the correct highlight box on that note in the Music
+View, only once "Synchronize with Cursor Position" was enabled -- it's
+off by default, matching Frescobaldi's own native behavior.
+
+Not yet done: suppressing the generic externalchanges "reload?" bar
+Neovim's save also triggers (harmless double-handling, not a
+correctness bug).
 
 An unsaved ("Untitled") document has no path to hand Neovim, so a
 placeholder is shown instead of pretending to edit it.
 """
 
 
+import panelmanager
+from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 
@@ -42,6 +70,7 @@ class NvimEditorWidget(QWidget):
         self._panel = panel
         self._nvim_widget = None
         self._current_path = None
+        self._reloading = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -58,7 +87,11 @@ class NvimEditorWidget(QWidget):
 
         mainwindow = panel.mainwindow()
         mainwindow.currentDocumentChanged.connect(self._documentChanged)
+        mainwindow.currentViewChanged.connect(self._viewChanged)
         self._documentChanged(mainwindow.currentDocument())
+        view = mainwindow.currentView()
+        if view:
+            self._viewChanged(view)
 
     def _documentChanged(self, doc, old=None):
         path = doc.url().toLocalFile() if doc else ""
@@ -76,6 +109,7 @@ class NvimEditorWidget(QWidget):
         old = self._nvim_widget
         widget = NvimWidget(path, parent=self)
         widget.bufferWritten.connect(self._bufferWritten)
+        widget.cursorMoved.connect(self._nvimCursorMoved)
         self._stack.addWidget(widget)
         self._stack.setCurrentWidget(widget)
         self._nvim_widget = widget
@@ -88,4 +122,48 @@ class NvimEditorWidget(QWidget):
     def _bufferWritten(self, path):
         doc = self._panel.mainwindow().currentDocument()
         if doc and doc.url().toLocalFile() == path:
-            doc.load(keepUndo=True)
+            # Reloading moves the document's cursor(s); without this guard
+            # the resulting cursorPositionChanged would yank Neovim's own
+            # cursor right after the user just saved from inside it.
+            self._reloading = True
+            try:
+                doc.load(keepUndo=True)
+            finally:
+                self._reloading = False
+
+    # -- cursor sync: Frescobaldi View -> Neovim ------------------------------
+
+    def _viewChanged(self, view, old=None):
+        if old:
+            old.cursorPositionChanged.disconnect(self._viewCursorMoved)
+        if view:
+            view.cursorPositionChanged.connect(self._viewCursorMoved)
+
+    def _viewCursorMoved(self):
+        if self._reloading or self._nvim_widget is None:
+            return
+        mainwindow = self._panel.mainwindow()
+        doc = mainwindow.currentDocument()
+        if not doc or doc.url().toLocalFile() != self._current_path:
+            return
+        cursor = mainwindow.currentView().textCursor()
+        self._nvim_widget.set_cursor(cursor.blockNumber(), cursor.positionInBlock())
+
+    # -- cursor sync: Neovim -> Music View (PDF) ------------------------------
+
+    def _nvimCursorMoved(self, row, col):
+        mainwindow = self._panel.mainwindow()
+        doc = mainwindow.currentDocument()
+        if not doc or doc.url().toLocalFile() != self._current_path:
+            return
+        musicview_panel = panelmanager.manager(mainwindow).musicview
+        if not musicview_panel.instantiated():
+            return  # never force the PDF panel to load just because the cursor moved
+        if not musicview_panel.actionCollection.music_sync_cursor.isChecked():
+            return
+        block = doc.findBlockByNumber(row)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(doc)
+        cursor.setPosition(block.position() + min(col, block.length() - 1))
+        musicview_panel.widget().showCurrentLinks(scroll=True, cursor=cursor)

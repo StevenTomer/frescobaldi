@@ -206,11 +206,14 @@ class MusicView(QWidget):
             not self._clicking_link
             and self.parent().actionCollection.music_sync_cursor.isChecked())
 
-    def showCurrentLinks(self, scroll=False, msec=None):
+    def showCurrentLinks(self, scroll=False, msec=None, cursor=None):
         """Show objects at current text cursor.
 
         If scroll is True, also scrolls the view if needed. If msec is given,
         objects are highlighed that long. If not given, a default time is used.
+        If cursor is given, it's used instead of the current View's text
+        cursor -- e.g. for a cursor position reported by an editor other
+        than the current View (see nvimeditor).
 
         """
         if not self.isVisible() or not self._links:
@@ -221,7 +224,7 @@ class MusicView(QWidget):
         if not links:
             return # the PDF contains no references to the current text document
 
-        s = links.indices(view.textCursor())
+        s = links.indices(cursor or view.textCursor())
         if not s:
             if s is False:
                 self.view.clearHighlight(self._highlightMusicFormat)
