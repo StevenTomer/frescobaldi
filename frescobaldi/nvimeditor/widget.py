@@ -50,9 +50,15 @@ the note) produced the correct highlight box on that note in the Music
 View, only once "Synchronize with Cursor Position" was enabled -- it's
 off by default, matching Frescobaldi's own native behavior.
 
-Not yet done: suppressing the generic externalchanges "reload?" bar
-Neovim's save also triggers (harmless double-handling, not a
-correctness bug).
+The generic externalchanges "reload?" bar (see externalchanges/__init__.py)
+does *not* end up firing redundantly alongside this widget's own reload,
+despite both watching the same file-on-disk change -- verified directly
+by watching for it across a full second after a save, not just assumed.
+externalchanges debounces on a 500ms timer before comparing the document
+against disk (changedDocuments()), and by then our own synchronous
+reload has already caught the document up byte-for-byte, so its own
+"is this really different" check clears itself before ever showing
+anything.
 
 An unsaved ("Untitled") document has no path to hand Neovim, so a
 placeholder is shown instead of pretending to edit it.
