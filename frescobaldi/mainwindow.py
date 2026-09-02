@@ -136,7 +136,14 @@ class MainWindow(QMainWindow):
         self.viewManager = viewmanager.ViewManager(self)
         # Note layout.addWidget() changes the parent to self.mainwidget
         layout.addWidget(self.tabBar)
-        layout.addWidget(self.viewManager)
+        # Prototype: a real embedded Neovim (via qtnvim, not a normal
+        # dependency yet) that can swap in for the classic editor in
+        # this same spot. See nvimeditor/__init__.py.
+        if app.is_git_controlled() or QSettings().value("experimental-features", False, bool):
+            import nvimeditor
+            self.nvimEditorAction = nvimeditor.setup(self, layout)
+        else:
+            layout.addWidget(self.viewManager)
 
         app.load_extensions(self)
         self.createActions()

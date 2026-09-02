@@ -18,7 +18,8 @@
 # See http://www.gnu.org/licenses/ for more information.
 
 """
-The actual widget shown in the Neovim Editor panel.
+The actual widget shown in place of the classic editor when Neovim mode
+is active (see nvimeditor/__init__.py for how it's swapped in).
 
 v1 scope: opens a real embedded Neovim (qtnvim.NvimWidget) on the current
 document's file, switches to a fresh Neovim instance when the active
@@ -72,9 +73,9 @@ from PyQt6.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 
 class NvimEditorWidget(QWidget):
-    def __init__(self, panel):
-        super().__init__(panel)
-        self._panel = panel
+    def __init__(self, mainwindow, parent=None):
+        super().__init__(parent)
+        self._mainwindow = mainwindow
         self._nvim_widget = None
         self._current_path = None
         self._reloading = False
@@ -92,7 +93,6 @@ class NvimEditorWidget(QWidget):
         self._placeholder.setMargin(12)
         self._stack.addWidget(self._placeholder)
 
-        mainwindow = panel.mainwindow()
         mainwindow.currentDocumentChanged.connect(self._documentChanged)
         mainwindow.currentViewChanged.connect(self._viewChanged)
         # A dock widget's own widget() can be force-created (by Qt's
@@ -111,8 +111,14 @@ class NvimEditorWidget(QWidget):
         if view:
             self._viewChanged(view)
 
+    def focusNvim(self):
+        """Focus the embedded Neovim widget, if one is currently shown
+        (not the placeholder). Called after this widget is swapped in."""
+        if self._nvim_widget is not None:
+            self._nvim_widget.setFocus()
+
     def _documentLoaded(self, doc):
-        if doc is self._panel.mainwindow().currentDocument():
+        if doc is self._mainwindow.currentDocument():
             self._documentChanged(doc)
 
     def _documentChanged(self, doc, old=None):
@@ -142,7 +148,7 @@ class NvimEditorWidget(QWidget):
             old.deleteLater()
 
     def _bufferWritten(self, path):
-        doc = self._panel.mainwindow().currentDocument()
+        doc = self._mainwindow.currentDocument()
         if doc and doc.url().toLocalFile() == path:
             # Reloading moves the document's cursor(s); without this guard
             # the resulting cursorPositionChanged would yank Neovim's own
@@ -164,21 +170,19 @@ class NvimEditorWidget(QWidget):
     def _viewCursorMoved(self):
         if self._reloading or self._nvim_widget is None:
             return
-        mainwindow = self._panel.mainwindow()
-        doc = mainwindow.currentDocument()
+        doc = self._mainwindow.currentDocument()
         if not doc or doc.url().toLocalFile() != self._current_path:
             return
-        cursor = mainwindow.currentView().textCursor()
+        cursor = self._mainwindow.currentView().textCursor()
         self._nvim_widget.set_cursor(cursor.blockNumber(), cursor.positionInBlock())
 
     # -- cursor sync: Neovim -> Music View (PDF) ------------------------------
 
     def _nvimCursorMoved(self, row, col):
-        mainwindow = self._panel.mainwindow()
-        doc = mainwindow.currentDocument()
+        doc = self._mainwindow.currentDocument()
         if not doc or doc.url().toLocalFile() != self._current_path:
             return
-        musicview_panel = panelmanager.manager(mainwindow).musicview
+        musicview_panel = panelmanager.manager(self._mainwindow).musicview
         if not musicview_panel.instantiated():
             return  # never force the PDF panel to load just because the cursor moved
         if not musicview_panel.actionCollection.music_sync_cursor.isChecked():

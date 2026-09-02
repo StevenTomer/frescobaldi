@@ -48,25 +48,18 @@ class FakeDocument(QTextDocument):
         return self._url
 
 
-def make_panel(document=None, view=None):
-    """A panel/mainwindow pair wired the way NvimEditorPanel instances
-    really are. `panel` must be a genuine QWidget -- it's passed as the
-    Qt parent in NvimEditorWidget.__init__, which PyQt rejects a plain
-    MagicMock for -- but everything Frescobaldi-specific about it
-    (mainwindow()) is mocked."""
-    panel = QWidget()
+def make_widget(qtbot, document=None, view=None):
+    """A NvimEditorWidget wired against a mocked mainwindow. Since
+    NvimEditorWidget now takes mainwindow directly (no more Panel/
+    QDockWidget wrapper -- it swaps into MainWindow's central layout
+    instead), a plain MagicMock is enough; it's no longer passed as a
+    Qt parent anywhere."""
     mainwindow = MagicMock()
     mainwindow.currentDocument.return_value = document
     mainwindow.currentView.return_value = view
-    panel.mainwindow = MagicMock(return_value=mainwindow)
-    return panel, mainwindow
-
-
-def make_widget(qtbot, document=None, view=None):
-    panel, mainwindow = make_panel(document, view)
-    widget = NvimEditorWidget(panel)
+    widget = NvimEditorWidget(mainwindow)
     qtbot.addWidget(widget)
-    return widget, panel, mainwindow
+    return widget, mainwindow
 
 
 @pytest.fixture(autouse=True)
@@ -83,14 +76,14 @@ def mock_nvim_widget():
 
 def test_document_without_url_shows_placeholder(qtbot):
     doc = FakeDocument("", "")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
     assert widget._current_path is None
     assert widget._stack.currentWidget() is widget._placeholder
 
 
 def test_document_with_path_opens_nvim(qtbot, mock_nvim_widget):
     doc = FakeDocument("hello", "/tmp/a.ly")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
     mock_nvim_widget.assert_called_once_with("/tmp/a.ly", parent=widget)
     assert widget._current_path == "/tmp/a.ly"
     assert isinstance(widget._nvim_widget, FakeNvimWidget)
@@ -98,7 +91,7 @@ def test_document_with_path_opens_nvim(qtbot, mock_nvim_widget):
 
 def test_reopening_same_path_does_not_recreate_nvim(qtbot, mock_nvim_widget):
     doc = FakeDocument("hello", "/tmp/a.ly")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
     assert mock_nvim_widget.call_count == 1
 
     widget._documentChanged(doc)  # same path again
@@ -108,7 +101,7 @@ def test_reopening_same_path_does_not_recreate_nvim(qtbot, mock_nvim_widget):
 
 def test_document_change_to_different_path_recreates_nvim(qtbot, mock_nvim_widget):
     doc1 = FakeDocument("a", "/tmp/a.ly")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc1)
+    widget, _mainwindow = make_widget(qtbot, doc1)
     first = widget._nvim_widget
 
     doc2 = FakeDocument("b", "/tmp/b.ly")
@@ -132,7 +125,7 @@ def test_document_loaded_signal_resyncs_when_it_matches_current_document(qtbot, 
     # this widget existed to listen. app.documentLoaded is the fix: it
     # fires whenever any document finishes loading, independent of this
     # widget's construction timing.
-    widget, _panel, mainwindow = make_widget(qtbot, document=None)
+    widget, mainwindow = make_widget(qtbot, document=None)
     assert widget._stack.currentWidget() is widget._placeholder
 
     doc = FakeDocument("hello", "/tmp/a.ly")
@@ -144,7 +137,7 @@ def test_document_loaded_signal_resyncs_when_it_matches_current_document(qtbot, 
 
 
 def test_document_loaded_signal_ignored_when_not_current_document(qtbot, mock_nvim_widget):
-    widget, _panel, _mainwindow = make_widget(qtbot, document=None)
+    widget, _mainwindow = make_widget(qtbot, document=None)
 
     other_doc = FakeDocument("other", "/tmp/other.ly")
     # mainwindow.currentDocument() still returns None here -- this loaded
@@ -160,7 +153,7 @@ def test_document_loaded_signal_ignored_when_not_current_document(qtbot, mock_nv
 
 def test_buffer_written_reloads_matching_document(qtbot):
     doc = FakeDocument("hello", "/tmp/a.ly")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
 
     widget._bufferWritten("/tmp/a.ly")
 
@@ -170,7 +163,7 @@ def test_buffer_written_reloads_matching_document(qtbot):
 
 def test_buffer_written_ignores_mismatched_path(qtbot):
     doc = FakeDocument("hello", "/tmp/a.ly")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
 
     widget._bufferWritten("/tmp/some-other-file.ly")
 
@@ -180,7 +173,7 @@ def test_buffer_written_ignores_mismatched_path(qtbot):
 def test_buffer_written_resets_reloading_flag_even_if_load_raises(qtbot):
     doc = FakeDocument("hello", "/tmp/a.ly")
     doc.load.side_effect = RuntimeError("boom")
-    widget, _panel, _mainwindow = make_widget(qtbot, doc)
+    widget, _mainwindow = make_widget(qtbot, doc)
 
     with pytest.raises(RuntimeError):
         widget._bufferWritten("/tmp/a.ly")
@@ -196,7 +189,7 @@ def test_view_cursor_moved_forwards_to_nvim(qtbot, mock_nvim_widget):
     view = MagicMock()
     cursor = MagicMock(blockNumber=MagicMock(return_value=1), positionInBlock=MagicMock(return_value=3))
     view.textCursor.return_value = cursor
-    widget, _panel, _mainwindow = make_widget(qtbot, doc, view)
+    widget, _mainwindow = make_widget(qtbot, doc, view)
 
     widget._viewCursorMoved()
 
@@ -206,7 +199,7 @@ def test_view_cursor_moved_forwards_to_nvim(qtbot, mock_nvim_widget):
 def test_view_cursor_moved_skipped_while_reloading(qtbot):
     doc = FakeDocument("line1\n", "/tmp/a.ly")
     view = MagicMock()
-    widget, _panel, _mainwindow = make_widget(qtbot, doc, view)
+    widget, _mainwindow = make_widget(qtbot, doc, view)
     widget._reloading = True
 
     widget._viewCursorMoved()
@@ -217,7 +210,7 @@ def test_view_cursor_moved_skipped_while_reloading(qtbot):
 def test_view_cursor_moved_skipped_when_path_mismatched(qtbot):
     doc = FakeDocument("line1\n", "/tmp/a.ly")
     view = MagicMock()
-    widget, _panel, mainwindow = make_widget(qtbot, doc, view)
+    widget, mainwindow = make_widget(qtbot, doc, view)
     other_doc = FakeDocument("other", "/tmp/other.ly")
     mainwindow.currentDocument.return_value = other_doc
 
@@ -229,7 +222,7 @@ def test_view_cursor_moved_skipped_when_path_mismatched(qtbot):
 def test_view_cursor_moved_skipped_when_no_nvim_widget(qtbot):
     doc = FakeDocument("", "")  # no path -> _openNvim never called
     view = MagicMock()
-    widget, _panel, _mainwindow = make_widget(qtbot, doc, view)
+    widget, _mainwindow = make_widget(qtbot, doc, view)
     assert widget._nvim_widget is None
 
     widget._viewCursorMoved()  # must not raise
@@ -254,7 +247,7 @@ def _music_view_setup(mainwindow, instantiated=True, sync_checked=True):
 
 def test_nvim_cursor_moved_skips_when_path_mismatched(qtbot):
     doc = FakeDocument("g a b c\n", "/tmp/a.ly")
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     other_doc = FakeDocument("other", "/tmp/other.ly")
     mainwindow.currentDocument.return_value = other_doc
     musicview_panel, patcher = _music_view_setup(mainwindow)
@@ -267,7 +260,7 @@ def test_nvim_cursor_moved_skips_when_path_mismatched(qtbot):
 
 def test_nvim_cursor_moved_skips_when_musicview_not_instantiated(qtbot):
     doc = FakeDocument("g a b c\n", "/tmp/a.ly")
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     musicview_panel, patcher = _music_view_setup(mainwindow, instantiated=False)
     try:
         widget._nvimCursorMoved(0, 2)
@@ -278,7 +271,7 @@ def test_nvim_cursor_moved_skips_when_musicview_not_instantiated(qtbot):
 
 def test_nvim_cursor_moved_skips_when_sync_disabled(qtbot):
     doc = FakeDocument("g a b c\n", "/tmp/a.ly")
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     musicview_panel, patcher = _music_view_setup(mainwindow, sync_checked=False)
     try:
         widget._nvimCursorMoved(0, 2)
@@ -289,7 +282,7 @@ def test_nvim_cursor_moved_skips_when_sync_disabled(qtbot):
 
 def test_nvim_cursor_moved_shows_links_when_enabled(qtbot):
     doc = FakeDocument("  g a b c\n", "/tmp/a.ly")  # 2-space indent, like real LilyPond source
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     musicview_panel, patcher = _music_view_setup(mainwindow)
     try:
         widget._nvimCursorMoved(0, 2)  # column 2 == the 'g', past the indent
@@ -305,7 +298,7 @@ def test_nvim_cursor_moved_shows_links_when_enabled(qtbot):
 
 def test_nvim_cursor_moved_skips_invalid_block(qtbot):
     doc = FakeDocument("only one line\n", "/tmp/a.ly")
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     musicview_panel, patcher = _music_view_setup(mainwindow)
     try:
         widget._nvimCursorMoved(50, 0)  # way past the last line
@@ -316,7 +309,7 @@ def test_nvim_cursor_moved_skips_invalid_block(qtbot):
 
 def test_nvim_cursor_moved_clamps_column_to_block_length(qtbot):
     doc = FakeDocument("hi\n", "/tmp/a.ly")  # block length is 3 (h, i, block separator)
-    widget, _panel, mainwindow = make_widget(qtbot, doc)
+    widget, mainwindow = make_widget(qtbot, doc)
     musicview_panel, patcher = _music_view_setup(mainwindow)
     try:
         widget._nvimCursorMoved(0, 999)  # far past the end of the line

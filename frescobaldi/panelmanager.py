@@ -85,10 +85,9 @@ class PanelManager(plugin.MainWindowPlugin):
         # commented out for stable releases.
         if app.is_git_controlled() or QSettings().value("experimental-features", False, bool):
             self.loadPanel("objecteditor.ObjectEditor", "coding")
-            # Embeds a real Neovim (via qtnvim, not a normal dependency
-            # yet) editing the current document. Prototype -- see
-            # nvimeditor/widget.py's module docstring for current scope.
-            self.loadPanel("nvimeditor.NvimEditorPanel", "coding")
+        # nvimeditor is no longer a dock panel -- it swaps into the main
+        # editing area in place of the classic editor. See
+        # MainWindow.__init__ (mainwindow.py) and nvimeditor/__init__.py.
         self.createActions()
 
         # make some default arrangements

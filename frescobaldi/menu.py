@@ -229,6 +229,9 @@ def menu_view(mainwindow):
     ac = panelmanager.manager(mainwindow).logtool.actionCollection
     m.addAction(ac.log_next_error)
     m.addAction(ac.log_previous_error)
+    if hasattr(mainwindow, 'nvimEditorAction'):
+        m.addSeparator()
+        m.addAction(mainwindow.nvimEditorAction)
     return m
 
 

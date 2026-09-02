@@ -18,32 +18,64 @@
 # See http://www.gnu.org/licenses/ for more information.
 
 """
-The Neovim Editor panel: a real, embedded Neovim instance (via the
-qtnvim library) editing the currently open document.
+Swaps the classic editor for a real embedded Neovim (via qtnvim) in
+MainWindow's central editing area -- the same position the classic View
+normally occupies, not a side panel. Was previously a QDockWidget-based
+side panel (see git history); rebuilt in place after user feedback that
+a second, separate editor pane wasn't the goal -- a replacement was.
 
-Experimental -- gated behind the "experimental-features" setting in
-panelmanager.py, same as ObjectEditor. Depends on qtnvim
-(https://github.com/StevenTomer/qtnvim), not a normal Frescobaldi
-dependency yet; the import is deferred to createWidget() so nothing
-breaks for users who don't have it installed and never open this panel.
+Experimental -- gated behind the experimental-features setting, same as
+ObjectEditor (see panelmanager.py). Wired directly into
+MainWindow.__init__ via setup() below rather than through the
+Panel/QDockWidget system: this needs to occupy mainwindow's central
+layout, which a dock widget can't do.
+
+Depends on qtnvim (https://github.com/StevenTomer/qtnvim), not a normal
+Frescobaldi dependency yet; both the qtnvim import and the actual
+NvimEditorWidget construction are deferred until the toggle is first
+switched on, so nothing breaks -- or costs anything -- for users who
+don't have it installed and never turn this on.
+
+Known gaps in this v1: the toggle action's label doesn't participate in
+Frescobaldi's live language-switching (app.languageChanged), and nothing
+here shuts down the embedded Neovim subprocess when the mainwindow
+closes (the same was true of the old dock-panel version -- not a
+regression, just not yet solved).
 """
 
 
-import panel
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtWidgets import QStackedWidget
 
 
-class NvimEditorPanel(panel.Panel):
-    """A dockwidget with a real, embedded Neovim editing the current document."""
-    def __init__(self, mainwindow):
-        super().__init__(mainwindow)
-        self.hide()
-        mainwindow.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self)
+def setup(mainwindow, layout):
+    """Wraps mainwindow.viewManager in a QStackedWidget added to layout,
+    in its place, and returns a checkable QAction that swaps in a
+    Neovim-backed editor as a second page covering the same spot.
 
-    def translateUI(self):
-        self.setWindowTitle(_("Neovim Editor"))
-        self.toggleViewAction().setText(_("&Neovim Editor"))
+    Call once from MainWindow.__init__, replacing the plain
+    ``layout.addWidget(mainwindow.viewManager)``.
+    """
+    stack = QStackedWidget()
+    stack.addWidget(mainwindow.viewManager)
+    layout.addWidget(stack)
 
-    def createWidget(self):
-        from . import widget
-        return widget.NvimEditorWidget(self)
+    action = QAction(mainwindow, checkable=True)
+    action.setText(_("Edit with &Neovim"))
+    action.setShortcut(QKeySequence("Meta+Alt+N"))
+
+    state = {"widget": None}
+
+    def toggled(checked):
+        if checked:
+            if state["widget"] is None:
+                from . import widget
+                state["widget"] = widget.NvimEditorWidget(mainwindow)
+                stack.addWidget(state["widget"])
+            stack.setCurrentWidget(state["widget"])
+            state["widget"].focusNvim()
+        else:
+            stack.setCurrentWidget(mainwindow.viewManager)
+
+    action.toggled.connect(toggled)
+    return action
