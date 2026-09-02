@@ -85,6 +85,10 @@ class PanelManager(plugin.MainWindowPlugin):
         # commented out for stable releases.
         if app.is_git_controlled() or QSettings().value("experimental-features", False, bool):
             self.loadPanel("objecteditor.ObjectEditor", "coding")
+            # Embeds a real Neovim (via qtnvim, not a normal dependency
+            # yet) editing the current document. Prototype -- see
+            # nvimeditor/widget.py's module docstring for current scope.
+            self.loadPanel("nvimeditor.NvimEditorPanel", "coding")
         self.createActions()
 
         # make some default arrangements
